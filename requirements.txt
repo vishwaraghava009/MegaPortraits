@@ -1,0 +1,12 @@
+torch
+torchvision
+PyYAML
+opencv-python
+scikit-image
+keras
+tensorflow
+facenet-pytorch
+Pillow
+numpy
+opencv-python
+matplotlib
