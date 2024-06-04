@@ -16,8 +16,6 @@ from losses.perceptual_loss import PerceptualLoss
 from losses.adversarial_loss import AdversarialLoss
 from losses.cycle_consistency_loss import CycleConsistencyLoss
 from losses.gaze_loss import GazeLoss
-from losses.pairwise_loss import PairwiseHeadPoseFacialDynamicsLoss
-from losses.cosine_similarity_loss import CosineSimilarityLoss
 
 intermediate_path = "/content/drive/MyDrive/VASA-1-master/intermediate_chunks"
 
@@ -80,8 +78,6 @@ def train(config):
     adversarial_loss = AdversarialLoss().to(device)
     cycle_consistency_loss = CycleConsistencyLoss().to(device)
     gaze_loss = GazeLoss().to(device)
-    pairwise_loss = PairwiseHeadPoseFacialDynamicsLoss(checkpoint_path='checkpoints/backbone.pth').to(device)
-    cosine_similarity_loss = CosineSimilarityLoss(checkpoint_path='checkpoints/backbone.pth').to(device)
 
     # Optimizers
     optimizer_G = optim.Adam(list(appearance_encoder.parameters()) + 
@@ -130,10 +126,8 @@ def train(config):
                 adv_loss = adversarial_loss(discriminator, driving_chunk, generated_image)
                 cycle_loss = cycle_consistency_loss(source_chunk, driving_chunk)
                 gaze_loss_value = gaze_loss(source_chunk, driving_chunk, head_pose, expression)
-                pairwise_loss_value = pairwise_loss(source_chunk, driving_chunk, head_pose, expression, driving_features)
-                cos_sim_loss = cosine_similarity_loss(source_chunk, driving_chunk)
 
-                total_loss = perc_loss + adv_loss + cycle_loss + gaze_loss_value + pairwise_loss_value + cos_sim_loss
+                total_loss = perc_loss + adv_loss + cycle_loss + gaze_loss_value
                 total_loss.backward()
                 optimizer_G.step()
                 optimizer_D.step()
