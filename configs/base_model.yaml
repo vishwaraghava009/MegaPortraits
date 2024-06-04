@@ -1,4 +1,4 @@
-data_path: 'data'
+data_path: '/content/drive/MyDrive/VASA-1-master/video'
 checkpoint_path: '/content/drive/MyDrive/VASA-1-master/checkpoints'
 log_path: '/content/drive/MyDrive/VASA-1-master/train_base.log'
 epochs: 10

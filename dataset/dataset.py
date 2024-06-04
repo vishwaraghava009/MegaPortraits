@@ -60,7 +60,7 @@ if __name__ == "__main__":
         transforms.CenterCrop(224),
         transforms.ToTensor()
     ])
-    dataset = MegaPortraitDataset(data_path='/data', transform=transform)
+    dataset = MegaPortraitDataset(data_path='/content/drive/MyDrive/VASA-1-master/video', transform=transform)
     print(f'Dataset size: {len(dataset)}')
     sample = dataset[0]
     print(f'Sample shapes: {sample[0].shape}, {sample[1].shape}')
