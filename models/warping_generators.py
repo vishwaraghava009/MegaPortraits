@@ -146,14 +146,19 @@ class WarpingGenerator(nn.Module):
             # Save intermediate chunk
             chunk_path = os.path.join(intermediate_path, f"x_chunk_{res_chunk_idx}_{block_idx}_{i//chunk_size + 1}.pt")
             torch.save(x_chunk.cpu(), chunk_path)
-            block_outputs.append(torch.load(chunk_path))
-            os.remove(chunk_path)
             del x_chunk
             torch.cuda.empty_cache()
             gc.collect()
+
+            # Load intermediate chunk
+            x_chunk = torch.load(chunk_path)
+            block_outputs.append(x_chunk)
+            os.remove(chunk_path)
+
             # Print memory status after each chunk
             print(f"Memory after processing chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
             print(f"Memory reserved after processing chunk {i//chunk_size + 1}: {torch.cuda.memory_reserved() / 1e9} GB")
+
         return torch.cat(block_outputs, dim=0).to(x.device)
 
 if __name__ == "__main__":
