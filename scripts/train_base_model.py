@@ -68,7 +68,6 @@ def train(config):
     ])
     dataset = MegaPortraitDataset(data_path=data_path, transform=transform)
     
-    # Debug: Check the number of samples in the dataset
     print(f"Number of samples in the dataset: {len(dataset)}")
     
     if len(dataset) == 0:
@@ -111,7 +110,7 @@ def train(config):
             driving_frame = driving_frame.to(device)
 
             # Split into chunks to avoid out-of-memory errors
-            chunk_size = 2  # Adjust chunk size as needed
+            chunk_size = 2  
             num_chunks = (source_image.size(0) + chunk_size - 1) // chunk_size
 
             for chunk_idx in range(num_chunks):
@@ -154,35 +153,41 @@ def train(config):
 
                 del source_chunk, driving_chunk, appearance_features, driving_features, head_pose, expression, warp_chunk
                 torch.cuda.empty_cache()
-                gc.collect()  # Force garbage collection
+                gc.collect()  
 
                 if i % log_interval == 0:
                     print(f"Epoch [{epoch}/{num_epochs}], Step [{i}/{len(dataloader)}], Chunk [{chunk_idx}/{num_chunks}], Loss: {total_loss.item()}")
 
-        # Save checkpoints
-        if (epoch + 1) % checkpoint_interval == 0:
-            save_checkpoint({
-                'epoch': epoch,
-                'state_dict': appearance_encoder.state_dict(),
-                'optimizer': optimizer_G.state_dict()
-            }, checkpoint_path, f'checkpoint_{epoch+1}.pth')
-            save_checkpoint({
-                'epoch': epoch,
-                'state_dict': discriminator.state_dict(),
-                'optimizer': optimizer_D.state_dict()
-            }, checkpoint_path, f'checkpoint_D_{epoch+1}.pth')
-
-    # Save latest checkpoints
     save_checkpoint({
-        'epoch': epoch,
+        'epoch': num_epochs,
         'state_dict': appearance_encoder.state_dict(),
         'optimizer': optimizer_G.state_dict()
-    }, checkpoint_path, 'latest_checkpoint.pth')
+    }, checkpoint_path, 'final_checkpoint_appearance_encoder.pth')
     save_checkpoint({
-        'epoch': epoch,
+        'epoch': num_epochs,
+        'state_dict': motion_encoder.state_dict(),
+        'optimizer': optimizer_G.state_dict()
+    }, checkpoint_path, 'final_checkpoint_motion_encoder.pth')
+    save_checkpoint({
+        'epoch': num_epochs,
+        'state_dict': warping_generator.state_dict(),
+        'optimizer': optimizer_G.state_dict()
+    }, checkpoint_path, 'final_checkpoint_warping_generator.pth')
+    save_checkpoint({
+        'epoch': num_epochs,
+        'state_dict': conv3d.state_dict(),
+        'optimizer': optimizer_G.state_dict()
+    }, checkpoint_path, 'final_checkpoint_conv3d.pth')
+    save_checkpoint({
+        'epoch': num_epochs,
+        'state_dict': conv2d.state_dict(),
+        'optimizer': optimizer_G.state_dict()
+    }, checkpoint_path, 'final_checkpoint_conv2d.pth')
+    save_checkpoint({
+        'epoch': num_epochs,
         'state_dict': discriminator.state_dict(),
         'optimizer': optimizer_D.state_dict()
-    }, checkpoint_path, 'latest_checkpoint_D.pth')
+    }, checkpoint_path, 'final_checkpoint_discriminator.pth')
 
 if __name__ == "__main__":
     with open('configs/base_model.yaml', 'r') as file:

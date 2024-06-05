@@ -20,6 +20,7 @@ class ResidualBlock3D(nn.Module):
             self.skip = nn.Identity()
 
     def forward(self, x):
+        print(f"ResidualBlock3D forward pass - input shape: {x.shape}")
         identity = self.skip(x)
         out = F.relu(self.gn1(self.conv1(x)))
         out = self.gn2(self.conv2(out))
@@ -29,7 +30,7 @@ class ResidualBlock3D(nn.Module):
 class WarpingGenerator(nn.Module):
     def __init__(self):
         super(WarpingGenerator, self).__init__()
-        self.initial = nn.Conv3d(248, 2048, kernel_size=1, stride=1)  # Adjusted input channels
+        self.initial = nn.Conv3d(248, 2048, kernel_size=1, stride=1)  
         self.res_blocks = nn.Sequential(
             ResidualBlock3D(2048, 512),
             nn.Upsample(scale_factor=(2, 2, 2), mode='trilinear', align_corners=False),
@@ -47,71 +48,70 @@ class WarpingGenerator(nn.Module):
         self.tanh = nn.Tanh()
 
     def forward(self, R, t, z, e):
-        # Print shapes for debugging
+        device = next(self.parameters()).device
+
         print(f"Original shapes - R: {R.shape}, t: {t.shape}, z: {z.shape}, e: {e.shape}")
         
-        # Ensure all inputs have the correct shape
         batch_size = R.size(0)
         
-        # Reshape R and t to match the expected dimensions
-        R = R.view(batch_size, -1, 1, 1, 1)
-        t = t.view(batch_size, -1, 1, 1, 1)
+        R = R.view(batch_size, -1, 1, 1, 1).to(device)
+        t = t.view(batch_size, -1, 1, 1, 1).to(device)
+        print(f"Memory after reshaping R and t: {torch.cuda.memory_allocated() / 1e9} GB")
         
-        # Ensure z and e have the correct shape: [batch_size, channels, depth, height, width]
         if len(z.size()) != 5 or len(e.size()) != 5:
             raise ValueError(f"Expected z and e to have 5 dimensions, got {z.size()} and {e.size()} instead.")
         
-        # Print shapes after reshaping for debugging
         print(f"Reshaped - R: {R.shape}, t: {t.shape}, z: {z.shape}, e: {e.shape}")
 
-        # Concatenate z and e along the channel dimension
-        combined_ze = torch.cat((z, e), dim=1)
+        combined_ze = torch.cat((z, e), dim=1).to(device)
+        print(f"Memory after concatenating z and e: {torch.cuda.memory_allocated() / 1e9} GB")
         
-        # Print shape after concatenation for debugging
         print(f"Combined z and e shape: {combined_ze.shape}")
         
-        # Ensure the combined tensor has the expected number of channels
         expected_channels = R.size(1) + t.size(1) + combined_ze.size(1)
         print(f"Expected channels after concatenation: {expected_channels}")
         
-        # Concatenate R, t, and combined_ze along the channel dimension
-        combined_rt = torch.cat((R, t), dim=1)
+        combined_rt = torch.cat((R, t), dim=1).to(device)
+        print(f"Memory after concatenating R and t: {torch.cuda.memory_allocated() / 1e9} GB")
         combined_rt = combined_rt.expand(-1, -1, combined_ze.size(2), combined_ze.size(3), combined_ze.size(4))
-        x = torch.cat((combined_rt, combined_ze), dim=1)
+        print(f"Memory after expanding combined_rt: {torch.cuda.memory_allocated() / 1e9} GB")
+        x = torch.cat((combined_rt, combined_ze), dim=1).to(device)
+        print(f"Memory after final concatenation: {torch.cuda.memory_allocated() / 1e9} GB")
         
-        # Print shape after concatenation for debugging
         print(f"Concatenated shape: {x.shape}")
         
-        # Ensure the concatenated tensor has the expected number of channels (248)
         if x.size(1) != 248:
             raise ValueError(f"Concatenated tensor has {x.size(1)} channels, expected 248.")
         
-        # Forward pass through the network
         x = F.relu(self.initial(x))
+        print(f"Memory after initial layer: {torch.cuda.memory_allocated() / 1e9} GB")
 
-        # Debugging memory before res_blocks
         print(f"Memory before res_blocks: {torch.cuda.memory_allocated() / 1e9} GB")
 
-        # Process res_blocks in chunks
-        chunk_size_res = 1  # Adjust chunk size as needed
+        x = x.cpu()
+        self.res_blocks.to("cpu")
+        print(f"Memory after transferring x and res_blocks to CPU: {torch.cuda.memory_allocated() / 1e9} GB")
+
         total_res_blocks_output = []
-        for res_chunk_idx in range(0, x.size(0), chunk_size_res):
-            res_chunk = x[res_chunk_idx:res_chunk_idx + chunk_size_res]
+        for res_chunk_idx in range(0, x.size(0)):
+            res_chunk = x[res_chunk_idx:res_chunk_idx + 1]  
+            print(f"Processing res_chunk_idx: {res_chunk_idx}, Memory before process_res_blocks_in_chunks: {torch.cuda.memory_allocated() / 1e9} GB")
             res_chunk_output = self.process_res_blocks_in_chunks(res_chunk, res_chunk_idx)
             total_res_blocks_output.append(res_chunk_output.cpu())
             
             del res_chunk, res_chunk_output
             torch.cuda.empty_cache()
             gc.collect()
+            print(f"Memory after processing res_chunk_idx: {res_chunk_idx}: {torch.cuda.memory_allocated() / 1e9} GB")
 
-        x = torch.cat(total_res_blocks_output, dim=0).to(x.device)
+        x = torch.cat(total_res_blocks_output, dim=0).to(device)
+        self.res_blocks.to(device)
+        print(f"Memory after transferring x and res_blocks back to GPU: {torch.cuda.memory_allocated() / 1e9} GB")
         
-        # Debugging memory after res_blocks
         print(f"Memory after res_blocks: {torch.cuda.memory_allocated() / 1e9} GB")
 
         x = self.final(x)
         
-        # Debugging memory after final layer
         print(f"Memory after final layer: {torch.cuda.memory_allocated() / 1e9} GB")
         
         return self.tanh(x)
@@ -120,16 +120,32 @@ class WarpingGenerator(nn.Module):
         """
         Process the res_blocks in chunks to manage memory usage better.
         """
-        chunk_size = 1  # Adjust chunk size as needed
+        chunk_size = 1  
         res_block_outputs = []
         for i in range(0, x.size(0), chunk_size):
             x_chunk = x[i:i+chunk_size]
+            print(f"Memory before block processing - chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
             for block_idx, block in enumerate(self.res_blocks):
-                x_chunk = self.process_block_in_chunks(block, x_chunk, res_chunk_idx, block_idx)
-            res_block_outputs.append(x_chunk.cpu())
+                if block_idx >= 8:  
+                    x_chunk = self.process_block_in_smaller_units(block, x_chunk, res_chunk_idx, block_idx)
+                else:
+                    x_chunk = self.process_block_in_chunks(block, x_chunk, res_chunk_idx, block_idx)
+
+            chunk_path = os.path.join(intermediate_path, f"res_chunk_{res_chunk_idx}_{i//chunk_size + 1}.pt")
+            torch.save(x_chunk.cpu(), chunk_path)
+            print(f"Memory after saving res_chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
+
             del x_chunk
             torch.cuda.empty_cache()
             gc.collect()
+            print(f"Memory after deleting res_chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
+
+            x_chunk = torch.load(chunk_path).to(x.device)
+            res_block_outputs.append(x_chunk)
+            os.remove(chunk_path)
+            print(f"Memory after loading res_chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
+
+            print(f"Memory after processing res_chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
 
         return torch.cat(res_block_outputs, dim=0).to(x.device)
 
@@ -137,29 +153,95 @@ class WarpingGenerator(nn.Module):
         """
         Process each block within res_blocks in chunks.
         """
-        chunk_size = 1  # Adjust chunk size as needed
+        chunk_size = 1  
         block_outputs = []
         for i in range(0, x.size(0), chunk_size):
             x_chunk = x[i:i+chunk_size]
-            print(f"Processing block {block_idx} in chunk {res_chunk_idx}-{i//chunk_size + 1} - shape: {x_chunk.shape}")  # Debugging statement
-            x_chunk = block(x_chunk)
-            # Save intermediate chunk
+            print(f"Processing block {block_idx} in chunk {res_chunk_idx}-{i//chunk_size + 1} - shape: {x_chunk.shape}")  
+            print(f"Memory before block forward pass - chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
+
+            try:
+                x_chunk = block(x_chunk)
+            except Exception as e:
+                print(f"Error during block forward pass: {e}")
+                raise e
+
+            print(f"Memory after block forward pass - chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
+
             chunk_path = os.path.join(intermediate_path, f"x_chunk_{res_chunk_idx}_{block_idx}_{i//chunk_size + 1}.pt")
             torch.save(x_chunk.cpu(), chunk_path)
+            print(f"Memory after saving chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
             del x_chunk
             torch.cuda.empty_cache()
             gc.collect()
+            print(f"Memory after deleting chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
 
-            # Load intermediate chunk
             x_chunk = torch.load(chunk_path)
             block_outputs.append(x_chunk)
             os.remove(chunk_path)
+            print(f"Memory after loading chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
 
-            # Print memory status after each chunk
             print(f"Memory after processing chunk {i//chunk_size + 1}: {torch.cuda.memory_allocated() / 1e9} GB")
             print(f"Memory reserved after processing chunk {i//chunk_size + 1}: {torch.cuda.memory_reserved() / 1e9} GB")
 
         return torch.cat(block_outputs, dim=0).to(x.device)
+
+    def process_block_in_smaller_units(self, block, x, res_chunk_idx, block_idx):
+        """
+        Special handling for blocks 8 and greater to process in even smaller units.
+        """
+        unit_size = 64  
+        partial_output = None  
+        depth_splits = (x.size(2) + unit_size - 1) // unit_size
+        height_splits = (x.size(3) + unit_size - 1) // unit_size
+        width_splits = (x.size(4) + unit_size - 1) // unit_size
+
+        for d in range(depth_splits):
+            for h in range(height_splits):
+                for w in range(width_splits):
+                    start_d = d * unit_size
+                    end_d = min(start_d + unit_size, x.size(2))
+                    start_h = h * unit_size
+                    end_h = min(start_h + unit_size, x.size(3))
+                    start_w = w * unit_size
+                    end_w = min(start_w + unit_size, x.size(4))
+
+                    x_unit = x[:, :, start_d:end_d, start_h:end_h, start_w:end_w]
+                    print(f"Processing block {block_idx} unit ({start_d}, {start_h}, {start_w}) - shape: {x_unit.shape}")  
+                    print(f"Memory before block forward pass - unit ({start_d}, {start_h}, {start_w}): {torch.cuda.memory_allocated() / 1e9} GB")
+
+                    try:
+                        x_unit = block(x_unit)
+                    except Exception as e:
+                        print(f"Error during block forward pass: {e}")
+                        raise e
+
+                    print(f"Memory after block forward pass - unit ({start_d}, {start_h}, {start_w}): {torch.cuda.memory_allocated() / 1e9} GB")
+
+                    # concatenating with existing partial output
+                    if partial_output is None:
+                        partial_output = x_unit
+                    else:
+                        partial_output = torch.cat((partial_output, x_unit), dim=2).to(x.device)
+
+                    partial_output_path = os.path.join(intermediate_path, f"partial_output_{res_chunk_idx}_{block_idx}.pt")
+                    torch.save(partial_output.cpu(), partial_output_path)
+                    print(f"Memory after saving partial output: {torch.cuda.memory_allocated() / 1e9} GB")
+
+                    del x_unit
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    print(f"Memory after deleting unit ({start_d}, {start_h}, {start_w}): {torch.cuda.memory_allocated() / 1e9} GB")
+
+                    partial_output = torch.load(partial_output_path).to(x.device)
+                    os.remove(partial_output_path)
+                    print(f"Memory after loading partial output: {torch.cuda.memory_allocated() / 1e9} GB")
+
+                    print(f"Memory after processing unit ({start_d}, {start_h}, {start_w}): {torch.cuda.memory_allocated() / 1e9} GB")
+                    print(f"Memory reserved after processing unit ({start_d}, {start_h}, {start_w}): {torch.cuda.memory_reserved() / 1e9} GB")
+
+        return partial_output.to(x.device)
+
 
 if __name__ == "__main__":
     model = WarpingGenerator()
