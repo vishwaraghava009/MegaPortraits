@@ -13,7 +13,7 @@ from dataset.dataset import MegaPortraitDataset
 from models.appearance_encoder import AppearanceEncoder
 from models.motion_encoder import MotionEncoder
 from models.warping_generators import WarpingGenerator
-from models.conv3d import Conv3D
+from models.conv3d import Conv3D, ResidualBlock3D
 from models.conv2d import Conv2D
 from models.discriminator import PatchGANDiscriminator
 from losses.perceptual_loss import PerceptualLoss
@@ -25,12 +25,12 @@ intermediate_path = "/content/drive/MyDrive/VASA-1-master/intermediate_chunks"
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def save_intermediate_chunks(chunk, index):
+def save_intermediate_chunks(chunk, index, prefix):
     os.makedirs(intermediate_path, exist_ok=True)
-    torch.save(chunk, os.path.join(intermediate_path, f"chunk_{index}.pt"))
+    torch.save(chunk, os.path.join(intermediate_path, f"{prefix}_chunk_{index}.pt"))
 
-def load_intermediate_chunks(index):
-    return torch.load(os.path.join(intermediate_path, f"chunk_{index}.pt"))
+def load_intermediate_chunks(index, prefix):
+    return torch.load(os.path.join(intermediate_path, f"{prefix}_chunk_{index}.pt"))
 
 def save_checkpoint(state, checkpoint_path, filename):
     os.makedirs(checkpoint_path, exist_ok=True)
@@ -110,7 +110,7 @@ def train(config):
             driving_frame = driving_frame.to(device)
 
             # Split into chunks to avoid out-of-memory errors
-            chunk_size = 2  
+            chunk_size = 1  
             num_chunks = (source_image.size(0) + chunk_size - 1) // chunk_size
 
             for chunk_idx in range(num_chunks):
@@ -124,34 +124,67 @@ def train(config):
                 optimizer_D.zero_grad()
 
                 # Forward pass through the models
+                print(f"Memory before appearance encoder: {torch.cuda.memory_allocated() / 1e9} GB")
                 appearance_features = appearance_encoder(source_chunk)
                 driving_features = appearance_encoder(driving_chunk)
+                print(f"Memory after appearance encoder: {torch.cuda.memory_allocated() / 1e9} GB")
+
+                print(f"Memory before motion encoder: {torch.cuda.memory_allocated() / 1e9} GB")
                 head_pose, expression = motion_encoder(driving_chunk)
-                
-                print(f"Memory before warping_generator: {torch.cuda.memory_allocated() / 1e9} GB")
-                
+                print(f"Memory after motion encoder: {torch.cuda.memory_allocated() / 1e9} GB")
+
+                print(f"Memory before warping generator: {torch.cuda.memory_allocated() / 1e9} GB")
                 warp_chunk = warping_generator(head_pose.detach(), expression.detach(), appearance_features.detach(), driving_features.detach())
+                print(f"Memory after warping generator: {torch.cuda.memory_allocated() / 1e9} GB")
+                print(f"Warp chunk shape: {warp_chunk.shape}")  # Debugging statement
+
+                save_intermediate_chunks(warp_chunk, chunk_idx, "warp_chunk")
+                del warp_chunk, appearance_features, driving_features, head_pose, expression
+                torch.cuda.empty_cache()
+                gc.collect()
+
+                warp_chunk = load_intermediate_chunks(chunk_idx, "warp_chunk").to(device)
                 
-                print(f"Memory after warping_generator: {torch.cuda.memory_allocated() / 1e9} GB")
-                
-                canonical_volume = conv3d(warp_chunk)
+                print(f"Memory before conv3d: {torch.cuda.memory_allocated() / 1e9} GB")
+                # Split conv3d forward pass into smaller parts to debug memory usage
+                x = warp_chunk
+                for j, layer in enumerate(conv3d.res_blocks):
+                    print(f"Before layer {j} ({layer.__class__.__name__}): shape = {x.shape}, memory = {torch.cuda.memory_allocated() / 1e9} GB")
+                    x = layer(x, j) if isinstance(layer, ResidualBlock3D) else layer(x)
+                    save_intermediate_chunks(x, j, f"conv3d_layer_{chunk_idx}")
+                    del x
+                    torch.cuda.empty_cache()
+                    x = load_intermediate_chunks(j, f"conv3d_layer_{chunk_idx}")
+                    print(f"After layer {j} ({layer.__class__.__name__}): shape = {x.shape}, memory = {torch.cuda.memory_allocated() / 1e9} GB")
+                    if torch.cuda.memory_allocated() / 1e9 > 10:
+                        print(f"Memory usage exceeded limit after layer {j}")
+                        break
+                canonical_volume = x
+
+                print(f"Memory before conv2d: {torch.cuda.memory_allocated() / 1e9} GB")
                 generated_image = conv2d(canonical_volume)
+                print(f"Memory after conv2d: {torch.cuda.memory_allocated() / 1e9} GB")
 
                 # Compute losses
+                print(f"Memory before loss computation: {torch.cuda.memory_allocated() / 1e9} GB")
                 perc_loss = perceptual_loss(generated_image, driving_chunk)
                 adv_loss = adversarial_loss(discriminator, driving_chunk, generated_image)
                 cycle_loss = cycle_consistency_loss(source_chunk, driving_chunk)
                 gaze_loss_value = gaze_loss(source_chunk, driving_chunk, head_pose, expression)
 
                 total_loss = perc_loss + adv_loss + cycle_loss + gaze_loss_value
+                print(f"Memory after loss computation: {torch.cuda.memory_allocated() / 1e9} GB")
+
+                print(f"Memory before backward: {torch.cuda.memory_allocated() / 1e9} GB")
                 total_loss.backward()
+                print(f"Memory after backward: {torch.cuda.memory_allocated() / 1e9} GB")
                 optimizer_G.step()
                 optimizer_D.step()
 
                 # Save intermediate results
-                save_intermediate_chunks(generated_image, i * num_chunks + chunk_idx)
+                save_intermediate_chunks(generated_image, i * num_chunks + chunk_idx, "generated_image")
 
-                del source_chunk, driving_chunk, appearance_features, driving_features, head_pose, expression, warp_chunk
+                del source_chunk, driving_chunk, warp_chunk, canonical_volume, generated_image
                 torch.cuda.empty_cache()
                 gc.collect()  
 

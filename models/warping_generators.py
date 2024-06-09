@@ -25,7 +25,7 @@ class ResidualBlock3D(nn.Module):
 class WarpingGenerator(nn.Module):
     def __init__(self):
         super(WarpingGenerator, self).__init__()
-        self.conv_initial = nn.Conv3d(256, 2048, kernel_size=1, stride=1)  # Corrected input channels to match the sum of inputs
+        self.conv_initial = nn.Conv3d(256, 2048, kernel_size=1, stride=1)
         self.reshape = nn.Sequential(
             nn.Conv3d(2048, 2048, kernel_size=1, stride=1),
             nn.GroupNorm(num_groups=32, num_channels=2048),
@@ -43,16 +43,43 @@ class WarpingGenerator(nn.Module):
         )
         self.final_conv = nn.Conv3d(32, 3, kernel_size=3, stride=1, padding=1)
 
-    def forward(self, x):
-        x = self.conv_initial(x)
+    def forward(self, head_pose, expression, appearance_features, driving_features):
+        print(f'head_pose shape: {head_pose.shape}')
+        print(f'expression shape: {expression.shape}')
+        print(f'appearance_features shape: {appearance_features.shape}')
+        print(f'driving_features shape: {driving_features.shape}')
+        
+        # Ensure head_pose and expression have compatible dimensions
+        batch_size = head_pose.shape[0]
+        head_pose = head_pose.view(batch_size, -1, 1, 1, 1).expand(-1, -1, *appearance_features.shape[2:])
+        expression = expression.view(batch_size, -1, 1, 1, 1).expand(-1, -1, *appearance_features.shape[2:])
+        
+        print(f'head_pose reshaped: {head_pose.shape}')
+        print(f'expression reshaped: {expression.shape}')
+        
+        combined_input = torch.cat((head_pose, expression, appearance_features, driving_features), dim=1)
+        
+        print(f'combined_input shape before padding: {combined_input.shape}')
+        
+        # Pad the input to match the expected input channels
+        if combined_input.shape[1] < 256:
+            padding = torch.zeros((combined_input.shape[0], 256 - combined_input.shape[1], *combined_input.shape[2:]), device=combined_input.device)
+            combined_input = torch.cat((combined_input, padding), dim=1)
+        
+        print(f'combined_input shape after padding: {combined_input.shape}')
+        
+        x = self.conv_initial(combined_input)
         x = self.reshape(x)
         x = self.res_blocks(x)
         x = self.final_conv(x)
-        return torch.tanh(x)  # Use Tanh to ensure output is in the range [-1, 1]
+        return torch.tanh(x)
 
 if __name__ == "__main__":
     model = WarpingGenerator()
     print(model)
-    test_input = torch.randn(1, 256, 16, 16, 16)  # Example input
-    test_output = model(test_input)
+    test_head_pose = torch.randn(1, 6)  # Example input
+    test_expression = torch.randn(1, 50)  # Example input
+    test_appearance_features = torch.randn(1, 96, 16, 16, 16)  # Example input
+    test_driving_features = torch.randn(1, 96, 16, 16, 16)  # Example input
+    test_output = model(test_head_pose, test_expression, test_appearance_features, test_driving_features)
     print(f'Output shape: {test_output.shape}')
